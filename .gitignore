@@ -44,3 +44,15 @@ htmlcov/
 # Output reports generated during testing (preserve template dirs)
 reports/*
 !reports/.gitkeep
+
+# Local live-capture recordings can contain private network metadata.
+captures/*.pcap
+captures/*.pcapng
+captures/*.cap
+
+# Local secrets and Python tooling
+.env
+.env.*
+!.env.example
+.mypy_cache/
+.ruff_cache/

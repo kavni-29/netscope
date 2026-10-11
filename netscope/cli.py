@@ -26,6 +26,7 @@ from netscope.reporting import (
     export_flows_csv,
     export_json,
     export_markdown_report,
+    export_pdf_report,
     export_packets_csv,
 )
 from netscope.statistics import StatisticsReport, calculate_statistics
@@ -282,7 +283,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("-i", "--input", dest="input_file", help="Path to input PCAP or PCAPNG capture file.")
     parser.add_argument("-o", "--output", dest="output_dir", help="Output directory to save generated reports and exports.")
     parser.add_argument("-c", "--config", dest="config_file", help="Path to JSON configuration file overriding detection thresholds.")
-    parser.add_argument("-f", "--format", dest="export_format", choices=["all", "csv", "json", "md", "none"], default="all", help="Export format (default: all).")
+    parser.add_argument("-f", "--format", dest="export_format", choices=["all", "csv", "json", "md", "pdf", "none"], default="all", help="Export format (default: all; includes PDF).")
     parser.add_argument("--charts", action="store_true", help="Generate and save Matplotlib chart images in output directory.")
     parser.add_argument("--limit", type=int, dest="max_packets", help="Optional safety limit on maximum packets to process.")
     parser.add_argument("--demo", action="store_true", help="Run demonstration analysis on synthetic PCAP.")
@@ -389,6 +390,7 @@ def main(args: Optional[list[str]] = None) -> int:
         export_endpoints_csv(stats.endpoints, out_dir / "endpoints.csv")
         export_json(summary, stats, flows, alerts, DetectionConfig(), out_dir / "report.json")
         export_markdown_report(summary, stats, flows, alerts, DetectionConfig(), out_dir / "report.md")
+        export_pdf_report(summary, stats, flows, alerts, DetectionConfig(), out_dir / "report.pdf")
         save_all_charts(stats, alerts, out_dir / "charts")
         print(f"[+] Demo reports & charts saved to {out_dir.resolve()}\n")
         return 0
@@ -483,6 +485,9 @@ def main(args: Optional[list[str]] = None) -> int:
 
             if fmt in ("all", "md"):
                 export_markdown_report(summary, stats, flows, alerts, config, out_dir / "report.md")
+
+            if fmt in ("all", "pdf"):
+                export_pdf_report(summary, stats, flows, alerts, config, out_dir / "report.pdf")
 
         if parsed_args.charts:
             chart_paths = save_all_charts(stats, alerts, out_dir / "charts")

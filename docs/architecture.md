@@ -25,7 +25,7 @@ netscope/
 ├── live.py             # Scapy interface discovery, capture lifecycle, bounded live analysis
 ├── models.py           # Dataclasses for PacketRecord, FlowKey, FlowRecord, AlertRecord, Summary
 ├── parser.py           # Scapy streaming reader, protocol extractors, wire-length logic
-├── reporting.py        # CSV, JSON, and Markdown report export generators
+├── reporting.py        # CSV, JSON, Markdown, and PDF report export generators
 └── visualisation.py    # Decoupled Matplotlib chart creation routines
 ```
 
@@ -73,7 +73,7 @@ sequenceDiagram
     StatsEngine-->>User: StatisticsReport
     User->>DetectEngine: DetectionEngine.run(PacketRecords, FlowRecords, StatisticsReport)
     DetectEngine-->>User: List[AlertRecord]
-    User->>Reporting: Export CSV / JSON / Markdown / Charts
+    User->>Reporting: Export CSV / JSON / Markdown / PDF / Charts
 ```
 
 ---

@@ -14,6 +14,7 @@ from netscope.reporting import (
     export_json,
     export_markdown_report,
     export_packets_csv,
+    export_pdf_report,
 )
 from netscope.statistics import calculate_statistics
 
@@ -131,3 +132,50 @@ def test_export_markdown_report_content(tmp_path: Path):
     assert "Executive Summary" in content
     assert "Protocol Distribution" in content
     assert "Defensive Security Scope" in content
+
+
+def test_export_pdf_report_contains_report_content(tmp_path: Path):
+    packets = [
+        PacketRecord.create(1, 10.0, "10.0.0.1", "10.0.0.2", "TCP", 50000, 443, length=120),
+        PacketRecord.create(2, 10.5, "10.0.0.2", "10.0.0.1", "TCP", 443, 50000, length=180),
+    ]
+    flows = aggregate_flows(packets)
+    stats = calculate_statistics(packets, flows)
+    summary = AnalysisSummary("capture.pcap", 300, 2, 0, 0, 300, 2, 1, {"TCP": 2}, 0, 0.02)
+    path = export_pdf_report(summary, stats, flows, [], DetectionConfig(), tmp_path / "reports" / "report.pdf")
+    payload = path.read_bytes()
+    assert payload.startswith(b"%PDF-")
+    assert b"Network Traffic Analysis Report" in payload
+    assert b"Packets analysed" in payload
+    assert b"capture.pcap" in payload
+    assert b"10.0.0.1" in payload
+
+
+def test_export_pdf_report_handles_empty_analysis(tmp_path: Path):
+    stats = calculate_statistics([])
+    summary = AnalysisSummary("empty.pcap", 0, 0, 0, 0, 0, 0, 0, {}, 0, 0.0)
+    path = export_pdf_report(summary, stats, [], [], DetectionConfig(), tmp_path / "empty.pdf")
+    payload = path.read_bytes()
+    assert payload.startswith(b"%PDF-")
+    assert b"No packets were available for anomaly evaluation" in payload
+    assert b"Traffic Visualisations" not in payload
+
+
+def test_export_pdf_report_paginates_long_flow_table(tmp_path: Path):
+    packets = [PacketRecord.create(i, float(i), f"10.0.{i // 250}.{i % 250}", "192.0.2.1", "UDP", 2000 + i, 53, length=64) for i in range(1, 85)]
+    flows = aggregate_flows(packets)
+    stats = calculate_statistics(packets, flows)
+    summary = AnalysisSummary("large.pcap", 84 * 64, 84, 0, 0, 84 * 64, 84, len(flows), {"UDP": 84}, 0, 0.1)
+    payload = export_pdf_report(summary, stats, flows, [], DetectionConfig(), tmp_path / "large.pdf").read_bytes()
+    assert payload.startswith(b"%PDF-")
+    assert payload.count(b"Page ") >= 2
+
+
+def test_export_pdf_report_wraps_output_errors(tmp_path: Path):
+    from netscope.exceptions import ExportError
+    import pytest
+
+    stats = calculate_statistics([])
+    summary = AnalysisSummary("empty.pcap", 0, 0, 0, 0, 0, 0, 0, {}, 0, 0.0)
+    with pytest.raises(ExportError, match="Failed exporting PDF report"):
+        export_pdf_report(summary, stats, [], [], DetectionConfig(), tmp_path)

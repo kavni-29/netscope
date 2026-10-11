@@ -14,11 +14,11 @@ python -m pytest -v
 - `test_flows.py`: canonical keys, reverse direction accounting, and flow metrics.
 - `test_statistics.py`: protocol, endpoint, packet-size, and time-bucket metrics.
 - `test_detectors.py`: all six offline detection rules and threshold cases.
-- `test_reporting.py`: CSV, JSON, and Markdown output.
+- `test_reporting.py`: CSV, JSON, Markdown, and PDF output, including empty reports, content, pagination, and export errors.
 - `test_cli.py`: CLI arguments, errors, and exports.
 - `test_integration.py`: offline analysis pipeline integration.
 - `test_live.py`: bounded live packet history, bidirectional flow aggregation, inactivity expiration, mocked capture lifecycle, filters, and PCAPNG recording that is reopened through the offline parser.
 
 Live capture on a real network interface is intentionally not part of the unit suite. To check a local setup manually, list interfaces with `python -m netscope.cli interfaces`, select an interface you are authorised to monitor, start a short capture with `python -m netscope.cli live --interface <id> --duration 10 --record <file.pcapng>`, then analyse the resulting file with the offline CLI.
 
-The repository's earlier test log described a different checkout and environment, so it has been removed. Test results should be recorded only from the current checkout when executed.
+PDF tests inspect generated PDF bytes for report headings, values, page numbering, and correct error wrapping without requiring a PDF reader application. Live capture on a real network interface is not part of the standard suite.

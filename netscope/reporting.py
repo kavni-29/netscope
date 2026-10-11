@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import csv
 import json
+import html
+import io
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,6 +20,133 @@ from netscope.config import DetectionConfig
 from netscope.exceptions import ExportError
 from netscope.models import AlertRecord, AnalysisSummary, FlowRecord, PacketRecord
 from netscope.statistics import EndpointMetric, StatisticsReport
+
+
+def export_pdf_report(
+    summary: AnalysisSummary,
+    stats: StatisticsReport,
+    flows: List[FlowRecord],
+    alerts: List[AlertRecord],
+    config: DetectionConfig,
+    file_path: str | Path,
+    *,
+    mode: str = "offline",
+    interface: Optional[str] = None,
+) -> Path:
+    """Write a paginated PDF analysis report with reusable NetScope charts."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether
+    from netscope.visualisation import save_all_charts
+
+    path = Path(file_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        generated = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        styles = getSampleStyleSheet()
+        styles.add(ParagraphStyle(name="ReportTitle", parent=styles["Title"], textColor=colors.HexColor("#174a72"), alignment=TA_CENTER, spaceAfter=8))
+        styles.add(ParagraphStyle(name="SmallCell", parent=styles["BodyText"], fontSize=7.5, leading=9, wordWrap="CJK"))
+        styles.add(ParagraphStyle(name="Section", parent=styles["Heading2"], textColor=colors.HexColor("#174a72"), spaceBefore=10, spaceAfter=6, keepWithNext=1))
+
+        def safe(value: object) -> str:
+            return html.escape(str(value if value not in (None, "") else "—"))
+
+        def table(rows, widths, repeat=1):
+            result = Table(rows, colWidths=widths, repeatRows=repeat, hAlign="LEFT")
+            result.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#174a72")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("LEADING", (0, 0), (-1, -1), 10),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("GRID", (0, 0), (-1, -1), .35, colors.HexColor("#cbd5df")),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f1f5f9")]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]))
+            return result
+
+        def footer(canvas, doc):
+            canvas.saveState()
+            canvas.setStrokeColor(colors.HexColor("#cbd5df"))
+            canvas.line(18 * mm, 14 * mm, doc.pagesize[0] - 18 * mm, 14 * mm)
+            canvas.setFont("Helvetica", 8)
+            canvas.setFillColor(colors.HexColor("#52616b"))
+            canvas.drawString(18 * mm, 9 * mm, f"NetScope • Defensive traffic analysis • {generated}")
+            canvas.drawRightString(doc.pagesize[0] - 18 * mm, 9 * mm, f"Page {doc.page}")
+            canvas.restoreState()
+
+        doc = SimpleDocTemplate(str(path), pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm, topMargin=17 * mm, bottomMargin=20 * mm, pageCompression=0)
+        doc.title = "NetScope Network Traffic Analysis Report"
+        doc.author = "NetScope"
+        story = [Paragraph("NetScope", styles["ReportTitle"]), Paragraph("Network Traffic Analysis Report", styles["Heading1"]),
+                 Paragraph(f"Generated {generated} | Mode: {safe(mode.title())} analysis", styles["Normal"]),
+                 Paragraph(f"Source: {safe(summary.capture_file)}" + (f" | Interface: {safe(interface)}" if interface else ""), styles["Normal"]), Spacer(1, 8),
+                 Paragraph("Executive Summary", styles["Section"]),
+                 Paragraph("This report summarizes observed packet metadata and rule-based indicators. An alert is a heuristic requiring context and is not proof of malicious activity.", styles["BodyText"]), Spacer(1, 6)]
+        summary_rows = [["Measure", "Observed"], ["Packets analysed", f"{summary.packets_processed:,}"], ["Bytes analysed", f"{stats.total_bytes:,}"],
+                        ["Unique IP endpoints", f"{len(stats.endpoints):,}"], ["Bidirectional flows", f"{len(flows):,}"],
+                        ["Anomaly indicators", f"{len(alerts):,}"], ["Capture interval", f"{stats.capture_duration_sec:.2f} s"],
+                        ["Analysis runtime", f"{summary.analysis_duration_seconds:.3f} s"]]
+        story += [table(summary_rows, [65 * mm, 100 * mm]), Paragraph("Traffic Overview", styles["Section"])]
+        if stats.protocols:
+            proto_rows = [["Protocol", "Packets", "Packet share", "Bytes", "Byte share"]]
+            proto_rows.extend([[safe(m.protocol), f"{m.packet_count:,}", f"{m.packet_percentage:.1f}%", f"{m.byte_count:,}", f"{m.byte_percentage:.1f}%"] for m in stats.protocols.values()])
+            story.append(table(proto_rows, [32 * mm, 27 * mm, 29 * mm, 35 * mm, 30 * mm]))
+        if stats.top_talkers_by_bytes:
+            story += [Spacer(1, 8), Paragraph("Top Communicating Endpoints", styles["Heading3"])]
+            rows = [["Endpoint", "Packets", "Bytes", "Distinct destination ports"]]
+            rows.extend([[safe(e.endpoint), f"{e.total_packets:,}", f"{e.total_bytes:,}", str(e.distinct_dest_ports)] for e in stats.top_talkers_by_bytes[:10]])
+            story.append(table(rows, [53 * mm, 28 * mm, 36 * mm, 40 * mm]))
+        ps = stats.packet_sizes
+        story += [Spacer(1, 8), Paragraph("Packet sizes (wire length)", styles["Heading3"]),
+                  Paragraph(f"Count {ps.count:,} · min {ps.min_length:,} B · max {ps.max_length:,} B · mean {ps.mean_length:.1f} B · median {ps.median_length:.1f} B", styles["BodyText"])]
+
+        if alerts:
+            story.append(Paragraph("Anomaly Findings", styles["Section"]))
+            alert_rows = [["Severity / rule", "Endpoint", "Observed / threshold", "Evidence and explanation"]]
+            alert_rows.extend([[Paragraph(f"<b>{safe(a.severity)}</b><br/>{safe(a.rule_name)}", styles["SmallCell"]),
+                                Paragraph(safe(a.endpoint), styles["SmallCell"]),
+                                Paragraph(f"{safe(a.observed_value)}<br/>Threshold: {safe(a.threshold)}", styles["SmallCell"]),
+                                Paragraph(f"{safe(a.evidence_summary)}<br/>{safe(a.explanation)}", styles["SmallCell"])] for a in alerts])
+            story.append(table(alert_rows, [37 * mm, 34 * mm, 39 * mm, 48 * mm]))
+        else:
+            finding_text = "No packets were available for anomaly evaluation." if not stats.total_packets else "No configured detection threshold was exceeded in the analysed data."
+            story += [Paragraph("Anomaly Findings", styles["Section"]), Paragraph(finding_text, styles["BodyText"])]
+
+        if flows:
+            story.append(Paragraph("Bidirectional Flows", styles["Section"]))
+            rows = [["Protocol", "Endpoint A", "Endpoint B", "A-to-B / B-to-A packets", "Bytes", "Duration"]]
+            rows.extend([[safe(f.protocol), Paragraph(safe(f.endpoint_a_str), styles["SmallCell"]), Paragraph(safe(f.endpoint_b_str), styles["SmallCell"]),
+                          f"{f.packets_a_to_b:,} / {f.packets_b_to_a:,}", f"{f.total_bytes:,}", f"{f.duration:.2f} s"] for f in flows])
+            story.append(table(rows, [18 * mm, 38 * mm, 38 * mm, 32 * mm, 23 * mm, 18 * mm]))
+
+        if stats.endpoints:
+            story.append(Paragraph("Endpoint Details", styles["Section"]))
+            rows = [["Endpoint", "Sent", "Received", "Total bytes", "Destination ports"]]
+            endpoint_rows = sorted(stats.endpoints.values(), key=lambda e: e.total_bytes, reverse=True)
+            rows.extend([[Paragraph(safe(e.endpoint), styles["SmallCell"]), f"{e.packets_sent:,}", f"{e.packets_received:,}", f"{e.total_bytes:,}", str(e.distinct_dest_ports)] for e in endpoint_rows])
+            story.append(table(rows, [47 * mm, 24 * mm, 27 * mm, 33 * mm, 36 * mm]))
+
+        has_visual_data = bool(stats.protocols or stats.time_series or stats.endpoints or stats.packet_sizes.count or alerts)
+        if has_visual_data:
+            story.append(Paragraph("Traffic Visualisations", styles["Section"]))
+            with tempfile.TemporaryDirectory(prefix="netscope-pdf-") as temp_dir:
+                chart_paths = save_all_charts(stats, alerts, temp_dir)
+                for chart_path in chart_paths:
+                    chart = Image(io.BytesIO(chart_path.read_bytes()), width=165 * mm, height=90 * mm, kind="proportional")
+                    story.append(KeepTogether([chart, Spacer(1, 5)]))
+
+        story += [Paragraph("Methodology and Limitations", styles["Section"]),
+                  Paragraph("NetScope aggregates packet metadata into canonical bidirectional flows and evaluates configurable deterministic rules for packet rates, destination-port diversity, TCP SYN ratios, volume deviations, traffic concentration, and repeated communication. Encryption limits application visibility; no payload decryption, full TCP state reconstruction, or attack attribution is performed. Benign workloads and network conditions can trigger indicators.", styles["BodyText"])]
+        doc.build(story, onFirstPage=footer, onLaterPages=footer)
+        return path
+    except Exception as exc:
+        raise ExportError(f"Failed exporting PDF report to {file_path}: {exc}") from exc
 
 
 def export_flows_csv(flows: List[FlowRecord], file_path: str | Path) -> Path:

@@ -29,6 +29,7 @@ from netscope.reporting import (
     export_flows_csv,
     export_json,
     export_markdown_report,
+    export_pdf_report,
 )
 from netscope.statistics import EndpointMetric, StatisticsReport
 from netscope.visualisation import (
@@ -150,7 +151,7 @@ class NetScopeGUI(tk.Tk):
 
         lbl_subtitle = tk.Label(
             header,
-            text="Offline Packet & Flow Inspection with Explainable Anomaly Detection",
+            text="Offline analysis and interface-based live monitoring",
             font=("Segoe UI", 9, "italic"),
             fg="#d0e1fd",
             bg=self.c_primary,
@@ -161,7 +162,7 @@ class NetScopeGUI(tk.Tk):
         intake_frame = ttk.Frame(self, padding=(15, 10))
         intake_frame.pack(fill="x", side="top")
 
-        ttk.Label(intake_frame, text="Capture File:").pack(side="left")
+        ttk.Label(intake_frame, text="Load PCAP/PCAPNG:").pack(side="left")
         self.ent_filepath = ttk.Entry(intake_frame, font=("Segoe UI", 9))
         self.ent_filepath.pack(side="left", fill="x", expand=True, padx=8)
 
@@ -220,6 +221,8 @@ class NetScopeGUI(tk.Tk):
 
     # ---------------- TAB 1: OVERVIEW ----------------
     def _build_tab_overview(self) -> None:
+        ttk.Label(self.tab_overview, text="Load a capture file above, or choose Live Monitoring to watch an interface.",
+                  foreground="#52616b", wraplength=900).pack(anchor="w", padx=5, pady=(0, 5))
         # Metric Cards Container
         cards_frame = ttk.Frame(self.tab_overview)
         cards_frame.pack(fill="x", pady=5)
@@ -274,6 +277,8 @@ class NetScopeGUI(tk.Tk):
 
     # ---------------- TAB 2: FLOWS ----------------
     def _build_tab_flows(self) -> None:
+        ttk.Label(self.tab_flows, text="A flow groups packets between the same two endpoints in both directions.",
+                  foreground="#52616b").pack(anchor="w", pady=(0, 6))
         cols = ("Protocol", "Endpoint A", "Endpoint B", "A->B Pkts", "B->A Pkts", "Total Pkts", "Total Bytes", "Duration (s)")
         self.tree_flows = ttk.Treeview(self.tab_flows, columns=cols, show="headings")
 
@@ -436,10 +441,12 @@ class NetScopeGUI(tk.Tk):
         btn_frame = ttk.Frame(group, padding=(0, 15))
         btn_frame.grid(row=1, column=0, columnspan=3, sticky="w")
 
-        ttk.Button(btn_frame, text="Export All Formats (CSV + JSON + MD)", style="Primary.TButton", command=self._export_all).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Export All Formats", style="Primary.TButton", command=self._export_all).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Export CSVs Only", command=self._export_csvs).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Export JSON Only", command=self._export_json).pack(side="left", padx=5)
         ttk.Button(btn_frame, text="Export Markdown Report", command=self._export_markdown).pack(side="left", padx=5)
+        self.btn_pdf_export = ttk.Button(btn_frame, text="Export PDF Report", command=self._export_pdf_dialog)
+        self.btn_pdf_export.pack(side="left", padx=5)
 
         self.lbl_export_status = ttk.Label(group, text="", font=("Segoe UI", 9, "italic"))
         self.lbl_export_status.grid(row=2, column=0, columnspan=3, sticky="w", pady=10)
@@ -467,6 +474,8 @@ class NetScopeGUI(tk.Tk):
         self.live_stop_button.grid(row=3, column=1, sticky="w", padx=(115, 6), pady=8)
         self.live_export_button = ttk.Button(frame, text="Export Session", command=self._export_live_session, state="disabled")
         self.live_export_button.grid(row=3, column=1, sticky="w", padx=(175, 6), pady=8)
+        ttk.Label(frame, text="NetScope listens on this interface; use a networked app to generate ordinary traffic. It does not create traffic.",
+                  foreground="#52616b", wraplength=760).grid(row=4, column=0, columnspan=3, sticky="w", pady=(3, 0))
         frame.columnconfigure(1, weight=1)
         backend = ttk.LabelFrame(self.tab_live, text=" Capture Dependency ", padding=8)
         backend.pack(fill="x", pady=5)
@@ -614,7 +623,8 @@ class NetScopeGUI(tk.Tk):
         export_endpoints_csv(stats.endpoints, Path(out_dir) / "endpoints.csv")
         export_json(summary, stats, flows, alerts, self.config, Path(out_dir) / "report.json")
         export_markdown_report(summary, stats, flows, alerts, self.config, Path(out_dir) / "report.md")
-        messagebox.showinfo("Session Exported", f"Retained packet history and session counters exported to:\n{out_dir}")
+        self._queue_pdf_export(summary, stats, flows, alerts, self.config, Path(out_dir) / "report.pdf", mode="live", interface=self.live_session.interface if self.live_session else None)
+        messagebox.showinfo("Session Exported", f"CSV, JSON, and Markdown reports saved to:\n{out_dir}\n\nThe PDF is generating in the background; NetScope will confirm when it finishes.")
 
     def _live_stop_worker(self) -> None:
         try:
@@ -634,10 +644,42 @@ class NetScopeGUI(tk.Tk):
             self.ent_export_dir.insert(0, d)
 
     def _export_all(self) -> None:
-        self._export_csvs()
-        self._export_json()
-        self._export_markdown()
-        self.lbl_export_status.config(text=f"[+] Successfully exported all formats to {self.ent_export_dir.get()}", foreground="green")
+        if not self.analysis_summary or not self.statistics_report:
+            messagebox.showwarning("Export Warning", "Analyse a capture before exporting reports.")
+            return
+        try:
+            self._export_csvs()
+            self._export_json()
+            self._export_markdown()
+            self._queue_pdf_export(self.analysis_summary, self.statistics_report, self.flows, self.alerts, self.config, Path(self.ent_export_dir.get()) / "report.pdf")
+            self.lbl_export_status.config(text=f"Exporting CSV, JSON, Markdown and PDF to {self.ent_export_dir.get()}…", foreground="#174a72")
+        except Exception as exc:
+            self.lbl_export_status.config(text=f"Report export failed: {exc}", foreground="red")
+            messagebox.showerror("Report Export Failed", str(exc))
+
+    def _export_pdf_dialog(self) -> None:
+        if not self.analysis_summary or not self.statistics_report:
+            messagebox.showwarning("Export Warning", "Analyse a capture before exporting a PDF report.")
+            return
+        destination = filedialog.asksaveasfilename(
+            title="Save NetScope PDF report", defaultextension=".pdf",
+            initialfile="report.pdf", filetypes=[("PDF report", "*.pdf")],
+        )
+        if destination:
+            self._queue_pdf_export(self.analysis_summary, self.statistics_report, self.flows, self.alerts,
+                                   self.config, Path(destination))
+            self.lbl_export_status.config(text="Generating PDF report…", foreground="#174a72")
+
+    def _queue_pdf_export(self, summary, stats, flows, alerts, config, destination, *, mode="offline", interface=None) -> None:
+        """Generate PDF away from Tk's event thread and report completion via the UI queue."""
+        self.btn_pdf_export.config(state="disabled")
+        def worker():
+            try:
+                result = export_pdf_report(summary, stats, flows, alerts, config, destination, mode=mode, interface=interface)
+                self.msg_queue.put(("PDF_SUCCESS", str(result)))
+            except Exception as exc:
+                self.msg_queue.put(("PDF_ERROR", str(exc)))
+        threading.Thread(target=worker, daemon=True).start()
 
     def _export_csvs(self) -> None:
         if not self.analysis_summary or not self.statistics_report:
@@ -721,6 +763,14 @@ class NetScopeGUI(tk.Tk):
                     self._on_analysis_complete(summary, stats, flows, alerts)
                 elif msg_type == "ERROR":
                     self._on_analysis_failed(data)
+                elif msg_type == "PDF_SUCCESS":
+                    self.btn_pdf_export.config(state="normal")
+                    self.lbl_export_status.config(text=f"PDF report saved: {data}", foreground="green")
+                    messagebox.showinfo("PDF Report Saved", f"PDF report saved to:\n{data}")
+                elif msg_type == "PDF_ERROR":
+                    self.btn_pdf_export.config(state="normal")
+                    self.lbl_export_status.config(text=f"PDF export failed: {data}", foreground="red")
+                    messagebox.showerror("PDF Export Failed", data)
         except queue.Empty:
             pass
         try:

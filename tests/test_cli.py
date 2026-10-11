@@ -46,4 +46,5 @@ def test_cli_successful_execution(minimal_pcap_file: Path, tmp_path: Path, capsy
     assert (out_dir / "flows.csv").is_file()
     assert (out_dir / "report.json").is_file()
     assert (out_dir / "report.md").is_file()
+    assert (out_dir / "report.pdf").is_file()
     assert (out_dir / "charts" / "protocol_distribution.png").is_file()
