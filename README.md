@@ -12,7 +12,7 @@ NetScope features a clean, decoupled architecture: a shared core analysis engine
 ---
 
 ## Table of Contents
-1. [Project Overview](#product-vision--problem-statement)
+1. [Project Overview](#project-overview)
 2. [Key Features](#key-features)
 3. [Technology Stack](#technology-stack)
 4. [Component Architecture & Pipeline](#component-architecture--pipeline)
@@ -31,7 +31,7 @@ NetScope features a clean, decoupled architecture: a shared core analysis engine
 
 ---
 
-## Product Vision & Problem Statement
+## Project Overview
 
 Raw network packet captures contain millions of bytes of binary data. Security analysts, network engineers, and students are often faced with thousands of individual packets in Wireshark without an immediate high-level summary of:
 - Which endpoints communicated and for how long?
@@ -45,7 +45,7 @@ Raw network packet captures contain millions of bytes of binary data. Security a
 
 ## Key Features
 
-- **Multi-Protocol Dissection**: Incremental extraction of IPv4, IPv6, TCP (with control flags), UDP, ICMP, ICMPv6, and DNS query metadata using streaming Scapy readers.
+- **Multi-Protocol Dissection**: Offline parsing streams saved PCAP/PCAPNG files. Live capture normalizes packets from Scapy callbacks. Both paths extract IPv4, IPv6, TCP (with control flags), UDP, ICMP, ICMPv6, and DNS query metadata.
 - **Canonical Bidirectional Flow Engine**: Deterministic endpoint ordering `(protocol, min(EP_A, EP_B), max(EP_A, EP_B))` ensuring reverse packets map to the identical flow record with directional packet/byte accounting.
 - **Descriptive Statistical Profiling**:
   - Full protocol distributions (counts, bytes, percentages).
@@ -72,12 +72,12 @@ Raw network packet captures contain millions of bytes of binary data. Security a
 | Technology | Role & Purpose | Justification |
 |---|---|---|
 | **Python 3.9+** | Core Language | Expressive, cross-platform standard with robust standard library. |
-| **Scapy (2.8.0)** | Packet Dissection | Industry-standard packet decoding supporting standard PCAP and PCAPNG formats. |
-| **NumPy (2.1.3)** | Numerical Calculations | High-performance percentile calculation, standard deviations, and array math. |
-| **Pandas (2.2.3)** | Tabular Structures | Flexible multi-attribute aggregation where appropriate. |
-| **Matplotlib (3.10.7)** | Visualizations | Publication-quality charts (donut share, time-series, histograms, bar charts) decoupled from UI. |
+| **Scapy (2.5+)** | Packet Dissection and Capture | Reads PCAP/PCAPNG and provides the live `AsyncSniffer` backend. Live capture also requires the platform driver/library below. |
+| **NumPy (1.24+)** | Numerical Calculations | Percentiles, standard deviations, and array calculations. |
+| **Pandas (2.0+)** | Tabular Structures | Tabular data operations used by the analysis stack. |
+| **Matplotlib (3.7+)** | Visualizations | Charts for protocol, time-series, packet-size, and endpoint data. |
 | **Tkinter / ttk** | Desktop Interface | Zero-dependency, lightweight, cross-platform native desktop GUI. |
-| **pytest (8.4.1)** | Test Automation | Fast, fixture-driven unit and integration testing. |
+| **pytest (7.0+)** | Test Automation | Fixture-driven unit and integration testing. |
 | **Standard Library** | System & I/O | Dataclasses, typing, csv, json, pathlib, logging, queue, threading. |
 
 ---
@@ -91,8 +91,8 @@ flowchart TD
     subgraph Intake ["1. Capture Intake"]
     A["PCAP / PCAPNG File"] --> B["stream_packets()"]
     X["Selected live interface"] --> C["Scapy AsyncSniffer"]
+    B --> D["Packet normalization / PacketRecord"]
     C --> D
-    B --> D["PacketRecord"]
     end
 
     subgraph Core ["2. Analysis Core Engine"]
@@ -134,7 +134,7 @@ Permissions vary by OS configuration. NetScope reports backend/interface/filter 
 ### 2. Clone and Setup Environment
 ```powershell
 # Clone the repository
-git clone https://github.com/your-username/netscope.git
+git clone https://github.com/kavni-29/netscope.git
 cd netscope
 
 # Create and activate a virtual environment
@@ -215,7 +215,7 @@ The CLI can list interfaces, capture until Ctrl+C, or capture for a fixed durati
 
 ```powershell
 python -m netscope.cli interfaces
-python -m netscope.cli live --interface "\Device\NPF_{...}" --duration 60 --record captures/session.pcapng
+python -m netscope.cli live --interface "<interface-id>" --duration 60 --record captures/session.pcapng
 python -m netscope.cli --input captures/session.pcapng --output reports/session
 ```
 
@@ -268,6 +268,8 @@ For a manual live-capture check, install the platform capture dependency, select
 ## Defensive Boundaries & Limitations
 
 NetScope is a **defensive analysis tool** for saved captures and user-authorised live interface monitoring.
+
+Only monitor interfaces and traffic that you own or have explicit permission to inspect.
 
 1. **Header Metadata vs Payload**: NetScope inspects packet headers and flow timing. Transport Layer Security (TLS/HTTPS) and encrypted protocols prevent application payload inspection; application data is neither decrypted nor guessed.
 2. **Flow Grouping vs State Machine Reconstruction**: NetScope aggregates packets into bidirectional flows. It does not perform full TCP stack emulation, connection state reconstruction, or retransmission tracking.
