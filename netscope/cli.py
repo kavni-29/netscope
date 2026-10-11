@@ -265,6 +265,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
     # Subcommand: gui
     subparsers.add_parser("gui", help="Launch interactive desktop Graphical User Interface.")
+    subparsers.add_parser("interfaces", help="List interfaces available to Scapy capture.")
+
+    # Subcommand: live (real interface capture; Ctrl+C stops cleanly)
+    sub_live = subparsers.add_parser("live", help="Monitor a selected live network interface.")
+    sub_live.add_argument("--interface", required=True, help="Capture interface identifier from Scapy interface listing.")
+    sub_live.add_argument("--filter", dest="capture_filter", default="", help="Optional libpcap/BPF capture filter.")
+    sub_live.add_argument("--record", help="Optional PCAPNG output path.")
+    sub_live.add_argument("--duration", type=float, default=0, help="Stop after this many seconds (0 means until Ctrl+C).")
 
     # Subcommand: version
     subparsers.add_parser("version", help="Print NetScope version information.")
@@ -290,12 +298,61 @@ def main(args: Optional[list[str]] = None) -> int:
     raw_args = list(args if args is not None else sys.argv[1:])
 
     # Smart routing: if first arg is a file or not a subcommand/flag, treat as --input
-    known_commands = {"demo", "inspect", "flows", "alerts", "gui", "version", "help", "-h", "--help"}
+    known_commands = {"demo", "inspect", "flows", "alerts", "gui", "live", "interfaces", "version", "help", "-h", "--help"}
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in known_commands:
         raw_args = ["--input", raw_args[0]] + raw_args[1:]
 
     parser = build_arg_parser()
     parsed_args = parser.parse_args(raw_args)
+
+    if parsed_args.command == "interfaces":
+        try:
+            from netscope.live import discover_interfaces
+            interfaces = discover_interfaces()
+            if not interfaces:
+                print("No capture interfaces found.")
+                return 1
+            for name, label in interfaces:
+                print(f"{name}\t{label}")
+            return 0
+        except Exception as exc:
+            print(f"Interface discovery error: {exc}", file=sys.stderr)
+            return 2
+
+    if parsed_args.command == "live":
+        from netscope.live import LiveAnalyzer, LiveCaptureSession, discover_interfaces
+        try:
+            known = {name for name, _ in discover_interfaces()}
+            if parsed_args.interface not in known:
+                raise ValueError(f"Interface {parsed_args.interface!r} is unavailable. Use the GUI Refresh button or Scapy get_if_list() to list interfaces.")
+            cfg = DetectionConfig.load_json(parsed_args.config_file) if parsed_args.config_file else DetectionConfig()
+            analyzer = LiveAnalyzer(cfg)
+            def on_packet(pkt):
+                result = analyzer.process(pkt)
+                for alert in result["new_alerts"]:
+                    print(f"[{alert.severity}] {alert.rule_name}: {alert.explanation}")
+            session = LiveCaptureSession(parsed_args.interface, on_packet, parsed_args.capture_filter, parsed_args.record)
+            session.start()
+            print(f"Capturing on {parsed_args.interface}. Press Ctrl+C to stop.")
+            deadline = time.monotonic() + parsed_args.duration if parsed_args.duration > 0 else None
+            try:
+                while session.sniffer and session.sniffer.running:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.25)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                session.stop()
+            if session.error:
+                raise RuntimeError(session.error)
+            print(f"Stopped. Packets: {analyzer.packet_count:,}; bytes: {analyzer.byte_count:,}; active flows: {analyzer.flows.flow_count:,}.")
+            if parsed_args.record:
+                print(f"PCAPNG recording: {Path(parsed_args.record).resolve()}")
+            return 0
+        except Exception as exc:
+            print(f"Live capture error: {exc}", file=sys.stderr)
+            return 2
 
     # Handle 'version' subcommand
     if parsed_args.command == "version":

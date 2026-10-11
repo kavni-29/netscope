@@ -132,7 +132,9 @@ def _dissect_scapy_packet(pkt: object, index: int) -> PacketRecord:
     ts = float(getattr(pkt, "time", 0.0))
     cap_len = len(pkt)
     # Wirelen convention: prefer captured wire length if exposed by file format
-    wire_len = int(getattr(pkt, "wirelen", cap_len))
+    # Live Scapy packets commonly expose wirelen=None; use captured frame length.
+    raw_wire_len = getattr(pkt, "wirelen", None)
+    wire_len = int(raw_wire_len if raw_wire_len is not None else cap_len)
 
     src_ip: Optional[str] = None
     dst_ip: Optional[str] = None

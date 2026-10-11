@@ -132,6 +132,25 @@ class FlowAggregator:
         """Return all aggregated flows sorted by total packet volume descending."""
         return sorted(self._flows.values(), key=lambda f: f.total_packets, reverse=True)
 
+    def expire_before(self, timestamp: float) -> int:
+        """Remove flows inactive before timestamp and return the number removed."""
+        stale = [key for key, flow in self._flows.items() if flow.last_timestamp < timestamp]
+        for key in stale:
+            del self._flows[key]
+        return len(stale)
+
+    def retain_most_recent(self, limit: int) -> int:
+        """Bound table size by evicting flows with the oldest last-seen time."""
+        if limit < 1:
+            raise ValueError("Flow retention limit must be positive")
+        excess = len(self._flows) - limit
+        if excess <= 0:
+            return 0
+        oldest = sorted(self._flows, key=lambda key: self._flows[key].last_timestamp)[:excess]
+        for key in oldest:
+            del self._flows[key]
+        return excess
+
     @property
     def flow_count(self) -> int:
         """Total number of distinct bidirectional flows."""

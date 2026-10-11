@@ -1,18 +1,18 @@
 # NetScope — Network Traffic Analyzer & Explainable Anomaly Detection System
 
-[![Python Version](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests: pytest](https://img.shields.io/badge/tests-34%20passed-brightgreen.svg)](tests/)
-[![Offline: Defensive](https://img.shields.io/badge/design-offline%20defensive-blueviolet.svg)](#defensive-boundaries-and-limitations)
+[![Tests: pytest](https://img.shields.io/badge/tests-pytest-informational.svg)](tests/)
+[![Defensive Analysis](https://img.shields.io/badge/design-defensive%20analysis-blueviolet.svg)](#defensive-boundaries-and-limitations)
 
-**NetScope** is a high-performance, offline-first network traffic analysis system and explainable anomaly detection engine written in Python. It converts saved **PCAP** and **PCAPNG** capture files into structured packet metadata, canonical bidirectional flows, comprehensive protocol and endpoint profiles, time-series traffic distributions, and rule-based anomaly indicators.
+**NetScope** is a Python network traffic analyzer for offline **PCAP/PCAPNG analysis** and **live network monitoring**. Both modes use the same packet normalization, bidirectional flow aggregation, statistics, and explainable rule-based detection components.
 
 NetScope features a clean, decoupled architecture: a shared core analysis engine powers both a **scriptable Command-Line Interface (CLI)** and a **responsive Tkinter/ttk desktop Graphical User Interface (GUI)** with embedded Matplotlib visualizations.
 
 ---
 
 ## Table of Contents
-1. [Product Vision & Problem Statement](#product-vision--problem-statement)
+1. [Project Overview](#product-vision--problem-statement)
 2. [Key Features](#key-features)
 3. [Technology Stack](#technology-stack)
 4. [Component Architecture & Pipeline](#component-architecture--pipeline)
@@ -21,6 +21,7 @@ NetScope features a clean, decoupled architecture: a shared core analysis engine
    - [Desktop GUI](#1-desktop-gui)
    - [Command-Line Interface (CLI)](#2-command-line-interface-cli)
    - [Reproducible Demonstration](#3-reproducible-demonstration)
+   - [Live Monitoring](#4-live-monitoring)
 7. [Detection Rules & Explainability](#detection-rules--explainability)
 8. [Export Formats](#export-formats)
 9. [Automated Testing](#automated-testing)
@@ -52,11 +53,12 @@ Raw network packet captures contain millions of bytes of binary data. Security a
   - Endpoint rankings and destination-port diversity tracking.
   - Time-series traffic bucketing (packets/sec, bytes/sec).
 - **Explainable Anomaly Detection**: 6 deterministic, configurable rules evaluating packet rates, destination port diversity, TCP SYN-without-ACK ratios, statistical volume deviations ($Z$-score), traffic concentration, and repetitive communication bursts.
-- **Modern Desktop GUI**:
+- **Desktop GUI**:
   - Built with Tkinter and themed ttk widgets.
   - Multi-tab navigation: Summary Cards, Bidirectional Flows, Endpoints, Anomaly Alerts (with master-detail evidence view), Visualizations, and Reports.
   - Column-sorting treeviews (numeric and alphabetical).
   - Embedded Matplotlib canvases with dynamic chart switching.
+  - Separate Live Monitoring tab for interface selection, BPF filters, optional PCAPNG recording, live counters, and alerts.
   - Non-blocking background worker thread ensuring continuous GUI responsiveness.
 - **Automated CLI & Reporting**:
   - Scriptable `argparse` execution with formatted terminal summary tables.
@@ -69,7 +71,7 @@ Raw network packet captures contain millions of bytes of binary data. Security a
 
 | Technology | Role & Purpose | Justification |
 |---|---|---|
-| **Python 3.11** | Core Language | Expressive, cross-platform standard with robust standard library. |
+| **Python 3.9+** | Core Language | Expressive, cross-platform standard with robust standard library. |
 | **Scapy (2.8.0)** | Packet Dissection | Industry-standard packet decoding supporting standard PCAP and PCAPNG formats. |
 | **NumPy (2.1.3)** | Numerical Calculations | High-performance percentile calculation, standard deviations, and array math. |
 | **Pandas (2.2.3)** | Tabular Structures | Flexible multi-attribute aggregation where appropriate. |
@@ -82,14 +84,15 @@ Raw network packet captures contain millions of bytes of binary data. Security a
 
 ## Component Architecture & Pipeline
 
-NetScope enforces strict separation between input processing, analytical aggregation, detection, and presentation logic. Both the CLI and GUI call the exact same underlying pipeline functions.
+NetScope separates input processing, analytical aggregation, detection, and presentation. Offline and live sources feed the shared packet model, flow aggregator, statistics, and detection components.
 
 ```mermaid
 flowchart TD
     subgraph Intake ["1. Capture Intake"]
-        A["PCAP / PCAPNG File"] --> B["validate_capture_file()"]
-        B --> C["stream_packets() / parse_capture()"]
-        C -->|Streamed PacketRecords| D["PacketRecord (Metadata)"]
+    A["PCAP / PCAPNG File"] --> B["stream_packets()"]
+    X["Selected live interface"] --> C["Scapy AsyncSniffer"]
+    C --> D
+    B --> D["PacketRecord"]
     end
 
     subgraph Core ["2. Analysis Core Engine"]
@@ -116,9 +119,17 @@ flowchart TD
 ## Installation & Setup
 
 ### 1. Prerequisites
-- **Python 3.9+** (Tested on Python 3.11.4).
+- **Python 3.9+**.
 - Windows, macOS, or Linux.
-- Note: Live packet capture is intentionally omitted. No special administrator/root privileges or Npcap driver installation are required to analyze saved PCAP files.
+- Offline file analysis does not require capture privileges. Live capture requires a supported packet capture driver/library and appropriate interface permissions.
+
+#### Live capture prerequisites
+
+- **Windows:** Install the current Npcap driver. Scapy must be able to access the Npcap capture service; elevated permissions may be required depending on installation and local policy.
+- **Linux:** Install libpcap (for example `libpcap-dev`/`libpcap` from the distribution) and grant capture access through the distribution's supported mechanism. Running the whole GUI as root is not required by NetScope.
+- **macOS:** Install/use the system libpcap/BPF capture support and ensure the user has permission to access the selected `/dev/bpf*` device.
+
+Permissions vary by OS configuration. NetScope reports backend/interface/filter errors and does not choose a replacement interface automatically.
 
 ### 2. Clone and Setup Environment
 ```powershell
@@ -196,6 +207,24 @@ python -m netscope.cli --input samples/synthetic_demo.pcap --output reports/demo
 
 ---
 
+### 4. Live Monitoring
+
+In the desktop app, open **Live Monitoring**, refresh the interface list, select the intended interface, optionally enter a BPF capture filter, and choose whether to record to PCAPNG. The status changes to Capturing only after Scapy starts. Stop ends the capture and closes the recording.
+
+The CLI can list interfaces, capture until Ctrl+C, or capture for a fixed duration:
+
+```powershell
+python -m netscope.cli interfaces
+python -m netscope.cli live --interface "\Device\NPF_{...}" --duration 60 --record captures/session.pcapng
+python -m netscope.cli --input captures/session.pcapng --output reports/session
+```
+
+Live analysis keeps a bounded recent packet history (5,000 packets by default), expires inactive flows after five minutes, and caps retained flows at 10,000. Rule evaluation runs at most once per second against the recent history. Recording stores raw packets only when explicitly enabled. The live session currently reports application queue drops; capture-backend drop counters are unavailable through this Scapy path and are not represented as zero.
+
+**Export Session** in the live tab writes reports for the retained packet history and retained flows. It does not claim to export packets that have aged out of those analysis buffers; enable PCAPNG recording when the complete session is needed, then run the offline analysis pipeline on that file.
+
+---
+
 ## Detection Rules & Explainability
 
 Each rule is deterministic, configurable, and produces an `AlertRecord` with transparent mathematical evidence:
@@ -225,35 +254,26 @@ Exports are written to the specified output directory:
 
 ## Automated Testing
 
-NetScope uses **pytest** with 100% offline synthetic fixtures. No live network or administrative privileges are needed.
+NetScope uses **pytest** with synthetic fixtures and mocked capture lifecycle tests. The standard suite does not require live network access or administrative privileges.
 
 Execute the test suite:
 ```powershell
 python -m pytest -v
 ```
 
-### Verified Test Summary (34 Tests Passing):
-```
-tests/test_cli.py ........ 4 passed
-tests/test_detectors.py .. 6 passed
-tests/test_flows.py ...... 7 passed
-tests/test_integration.py  1 passed
-tests/test_parser.py ..... 7 passed
-tests/test_reporting.py .. 4 passed
-tests/test_statistics.py . 5 passed
-======================= 34 passed in 1.29s =======================
-```
+For a manual live-capture check, install the platform capture dependency, select an interface you are authorised to monitor, start capture briefly, stop it, and confirm that counters update. If recording is enabled, open the saved PCAPNG with the offline workflow.
 
 ---
 
 ## Defensive Boundaries & Limitations
 
-NetScope is strictly an **offline defensive analysis tool**.
+NetScope is a **defensive analysis tool** for saved captures and user-authorised live interface monitoring.
 
 1. **Header Metadata vs Payload**: NetScope inspects packet headers and flow timing. Transport Layer Security (TLS/HTTPS) and encrypted protocols prevent application payload inspection; application data is neither decrypted nor guessed.
 2. **Flow Grouping vs State Machine Reconstruction**: NetScope aggregates packets into bidirectional flows. It does not perform full TCP stack emulation, connection state reconstruction, or retransmission tracking.
 3. **Anomaly Indicators vs Conclusive Attribution**: Detection rules identify traffic patterns departing from mathematical baselines. High volume, destination port diversity, and high SYN ratios can be caused by legitimate software or network anomalies. NetScope flags patterns requiring investigation rather than asserting confirmed intrusions.
 4. **No Active Network Modification**: NetScope never transmits packets, injects traffic, alters network configurations, or blocks endpoints.
+5. **Live retention and capture limits**: Live alerts and statistics use a bounded recent packet history. Flows that exceed the retention cap or inactivity timeout are removed from detailed views while session packet/byte counters continue. The Scapy backend does not provide reliable packet-drop counters here.
 
 ---
 
@@ -261,7 +281,7 @@ NetScope is strictly an **offline defensive analysis tool**.
 
 | Issue | Cause | Solution |
 |---|---|---|
-| `No libpcap provider available` warning on Windows | Scapy prints a warning if Npcap is not installed on Windows. | This warning is harmless for offline PCAP reading. Pure-Python file parsing works completely. |
+| `No libpcap provider available` or live capture cannot start | Npcap/libpcap is missing, unavailable, or the current user cannot access the interface. | Install the platform capture dependency above, check permissions, then refresh interfaces. Offline PCAP reading remains available. |
 | `InvalidCaptureError: Capture file is empty` | 0-byte file selected. | Select a valid PCAP or PCAPNG file. Run `python samples/generate_sample_pcap.py` to create a sample. |
 | Tkinter window does not appear on headless Linux | Missing X11/Wayland display server. | Use the CLI interface (`python -m netscope.cli`) which runs 100% headless. |
 
@@ -275,7 +295,6 @@ Detailed technical engineering documents are located in [`docs/`](docs/):
 - [`docs/data_model.md`](docs/data_model.md) — Typed data models, bidirectional flow key ordering, wire-length convention.
 - [`docs/testing.md`](docs/testing.md) — Testing strategy, synthetic fixtures, boundary coverage.
 - [`docs/deployment.md`](docs/deployment.md) — Step-by-step GitHub push, CI/CD, standalone Windows .exe build, and PyPI packaging.
-- [`docs/interview_guide.md`](docs/interview_guide.md) — Comprehensive technical interview preparation guide with 18 in-depth questions and answers.
 
 ---
 

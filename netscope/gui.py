@@ -37,6 +37,7 @@ from netscope.visualisation import (
     plot_top_endpoints,
     plot_traffic_over_time,
 )
+from netscope.live import LiveAnalyzer, LiveCaptureSession, discover_interfaces
 
 
 class NetScopeGUI(tk.Tk):
@@ -57,9 +58,14 @@ class NetScopeGUI(tk.Tk):
         self.config: DetectionConfig = DetectionConfig()
         self.msg_queue: queue.Queue = queue.Queue()
         self.is_analyzing = False
+        self.live_session: Optional[LiveCaptureSession] = None
+        self.live_analyzer: Optional[LiveAnalyzer] = None
+        self.live_event_queue: queue.Queue = queue.Queue(maxsize=200)
+        self.live_interface_map: Dict[str, str] = {}
 
         self._configure_styles()
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._poll_queue()
 
     def _configure_styles(self) -> None:
@@ -181,6 +187,7 @@ class NetScopeGUI(tk.Tk):
         self.tab_alerts = ttk.Frame(self.notebook, padding=10)
         self.tab_charts = ttk.Frame(self.notebook, padding=10)
         self.tab_export = ttk.Frame(self.notebook, padding=10)
+        self.tab_live = ttk.Frame(self.notebook, padding=10)
 
         self.notebook.add(self.tab_overview, text=" Summary Overview ")
         self.notebook.add(self.tab_flows, text=" Bidirectional Flows ")
@@ -188,6 +195,7 @@ class NetScopeGUI(tk.Tk):
         self.notebook.add(self.tab_alerts, text=" Anomaly Alerts ")
         self.notebook.add(self.tab_charts, text=" Visualisations ")
         self.notebook.add(self.tab_export, text=" Reports & Exports ")
+        self.notebook.add(self.tab_live, text=" Live Monitoring ")
 
         self._build_tab_overview()
         self._build_tab_flows()
@@ -195,6 +203,7 @@ class NetScopeGUI(tk.Tk):
         self._build_tab_alerts()
         self._build_tab_charts()
         self._build_tab_export()
+        self._build_tab_live()
 
         # Status Footer
         footer = ttk.Frame(self, padding=(15, 6))
@@ -432,6 +441,156 @@ class NetScopeGUI(tk.Tk):
         self.lbl_export_status = ttk.Label(group, text="", font=("Segoe UI", 9, "italic"))
         self.lbl_export_status.grid(row=2, column=0, columnspan=3, sticky="w", pady=10)
 
+    def _build_tab_live(self) -> None:
+        """Build actual interface-backed capture controls and live counters."""
+        frame = ttk.LabelFrame(self.tab_live, text=" Live Interface Capture ", padding=12)
+        frame.pack(fill="x", pady=6)
+        ttk.Label(frame, text="Interface:").grid(row=0, column=0, sticky="w", pady=4)
+        self.live_iface_var = tk.StringVar()
+        self.live_iface_combo = ttk.Combobox(frame, textvariable=self.live_iface_var, state="readonly", width=56)
+        self.live_iface_combo.grid(row=0, column=1, sticky="ew", padx=6)
+        ttk.Button(frame, text="Refresh", command=self._refresh_live_interfaces).grid(row=0, column=2, padx=4)
+        ttk.Label(frame, text="Capture filter (optional):").grid(row=1, column=0, sticky="w", pady=4)
+        self.live_filter_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.live_filter_var).grid(row=1, column=1, columnspan=2, sticky="ew", padx=6)
+        self.live_record_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame, text="Save packets to PCAPNG", variable=self.live_record_var).grid(row=2, column=0, sticky="w", pady=4)
+        self.live_record_path_var = tk.StringVar(value=str(Path("captures/live-session.pcapng")))
+        ttk.Entry(frame, textvariable=self.live_record_path_var).grid(row=2, column=1, sticky="ew", padx=6)
+        ttk.Button(frame, text="Browse...", command=self._browse_live_record).grid(row=2, column=2, padx=4)
+        self.live_start_button = ttk.Button(frame, text="Start Capture", style="Primary.TButton", command=self._start_live_capture)
+        self.live_start_button.grid(row=3, column=1, sticky="w", padx=6, pady=8)
+        self.live_stop_button = ttk.Button(frame, text="Stop", command=self._stop_live_capture, state="disabled")
+        self.live_stop_button.grid(row=3, column=1, sticky="w", padx=(115, 6), pady=8)
+        self.live_export_button = ttk.Button(frame, text="Export Session", command=self._export_live_session, state="disabled")
+        self.live_export_button.grid(row=3, column=1, sticky="w", padx=(175, 6), pady=8)
+        frame.columnconfigure(1, weight=1)
+        status = ttk.LabelFrame(self.tab_live, text=" Session Status ", padding=12)
+        status.pack(fill="x", pady=6)
+        self.live_status_label = ttk.Label(status, text="Idle — no live interface is being monitored.")
+        self.live_status_label.pack(anchor="w")
+        self.live_metrics_label = ttk.Label(status, text="Packets: 0   Bytes: 0   Active flows: 0   Alerts: 0   Application queue drops: 0")
+        self.live_metrics_label.pack(anchor="w", pady=4)
+        self.live_alert_text = tk.Text(self.tab_live, height=12, wrap="word", state="disabled")
+        self.live_alert_text.pack(fill="both", expand=True, pady=6)
+        self._refresh_live_interfaces()
+
+    def _refresh_live_interfaces(self) -> None:
+        try:
+            interfaces = discover_interfaces()
+            self.live_interface_map = {f"{label} ({name})": name for name, label in interfaces}
+            self.live_iface_combo["values"] = list(self.live_interface_map)
+            if interfaces and not self.live_iface_var.get():
+                self.live_iface_var.set(next(iter(self.live_interface_map)))
+            if not interfaces:
+                self.live_status_label.config(text="No capture interfaces were reported by Scapy.")
+        except Exception as exc:
+            self.live_status_label.config(text=str(exc))
+
+    def _browse_live_record(self) -> None:
+        path = filedialog.asksaveasfilename(defaultextension=".pcapng", filetypes=[("PCAPNG", "*.pcapng")])
+        if path:
+            self.live_record_path_var.set(path)
+
+    def _start_live_capture(self) -> None:
+        label = self.live_iface_var.get()
+        iface = self.live_interface_map.get(label)
+        if not iface:
+            messagebox.showwarning("Interface Required", "Select an available capture interface first.")
+            return
+        self.live_analyzer = LiveAnalyzer(self.config)
+        self.live_export_button.config(state="disabled")
+        output = self.live_record_path_var.get().strip() if self.live_record_var.get() else None
+        self.live_session = LiveCaptureSession(iface, self._handle_live_packet, self.live_filter_var.get(), output)
+        self.live_status_label.config(text=f"Starting capture on {label}...")
+        self.live_start_button.config(state="disabled")
+        self.live_stop_button.config(state="normal")
+        worker = threading.Thread(target=self._live_start_worker, daemon=True)
+        worker.start()
+
+    def _live_start_worker(self) -> None:
+        try:
+            assert self.live_session is not None
+            self.live_session.start()
+            self.live_event_queue.put_nowait(("STATE", f"Capturing on {self.live_session.interface}"))
+        except Exception as exc:
+            self.live_event_queue.put_nowait(("ERROR", str(exc)))
+
+    def _handle_live_packet(self, packet: object) -> None:
+        try:
+            if self.live_analyzer is None:
+                return
+            result = self.live_analyzer.process(packet)
+            try:
+                self.live_event_queue.put_nowait(("METRICS", result))
+            except queue.Full:
+                self.live_analyzer.dropped_events += 1
+            for alert in result["new_alerts"]:
+                try:
+                    self.live_event_queue.put_nowait(("ALERT", alert))
+                except queue.Full:
+                    self.live_analyzer.dropped_events += 1
+        except Exception as exc:
+            try:
+                self.live_event_queue.put_nowait(("ERROR", f"Packet processing failed: {exc}"))
+            except queue.Full:
+                pass
+
+    def _stop_live_capture(self) -> None:
+        if not self.live_session:
+            return
+        self.live_status_label.config(text="Stopping capture...")
+        self.live_stop_button.config(state="disabled")
+        threading.Thread(target=self._live_stop_worker, daemon=True).start()
+
+    def _export_live_session(self) -> None:
+        """Export a report for the retained live-analysis history."""
+        if not self.live_analyzer or not self.live_analyzer.packet_count:
+            messagebox.showwarning("Nothing to Export", "No packets were processed in this live session.")
+            return
+        from netscope.reporting import export_json, export_markdown_report
+        from netscope.statistics import calculate_statistics
+        out_dir = filedialog.askdirectory(title="Choose live-session report folder")
+        if not out_dir:
+            return
+        packets = list(self.live_analyzer.packets)
+        flows = self.live_analyzer.flows.get_flows()
+        stats = calculate_statistics(packets, flows, interval_sec=self.config.time_bucket_interval_sec)
+        alerts = list(self.live_analyzer._alerts.values())
+        summary = AnalysisSummary(
+            capture_file=f"live interface: {self.live_session.interface if self.live_session else 'unknown'}",
+            file_size_bytes=0,
+            packets_processed=len(packets),
+            packets_skipped=0,
+            packets_partial=0,
+            total_bytes=stats.total_bytes,
+            distinct_endpoints=len(stats.endpoints),
+            identified_flows=len(flows),
+            protocols_observed={name: metric.packet_count for name, metric in stats.protocols.items()},
+            alerts_generated=len(alerts),
+            analysis_duration_seconds=0.0,
+            capture_start_time=stats.capture_start_ts,
+            capture_end_time=stats.capture_end_ts,
+            capture_duration_seconds=stats.capture_duration_sec,
+        )
+        export_flows_csv(flows, Path(out_dir) / "flows.csv")
+        export_alerts_csv(alerts, Path(out_dir) / "alerts.csv")
+        export_endpoints_csv(stats.endpoints, Path(out_dir) / "endpoints.csv")
+        export_json(summary, stats, flows, alerts, self.config, Path(out_dir) / "report.json")
+        export_markdown_report(summary, stats, flows, alerts, self.config, Path(out_dir) / "report.md")
+        messagebox.showinfo("Session Exported", f"Retained packet history and session counters exported to:\n{out_dir}")
+
+    def _live_stop_worker(self) -> None:
+        try:
+            if self.live_session:
+                self.live_session.stop()
+                self.live_event_queue.put_nowait(("STATE", "Stopped"))
+        except Exception as exc:
+            try:
+                self.live_event_queue.put_nowait(("ERROR", str(exc)))
+            except queue.Full:
+                pass
+
     def _on_browse_export_dir(self) -> None:
         d = filedialog.askdirectory(initialdir=self.ent_export_dir.get())
         if d:
@@ -528,8 +687,53 @@ class NetScopeGUI(tk.Tk):
                     self._on_analysis_failed(data)
         except queue.Empty:
             pass
-        finally:
-            self.after(100, self._poll_queue)
+        try:
+            while True:
+                kind, data = self.live_event_queue.get_nowait()
+                if kind == "STATE":
+                    self.live_status_label.config(text=data)
+                    if data == "Stopped":
+                        self.live_start_button.config(state="normal")
+                        self.live_stop_button.config(state="disabled")
+                        if self.live_analyzer and self.live_analyzer.packet_count:
+                            self.live_export_button.config(state="normal")
+                elif kind == "ERROR":
+                    self.live_status_label.config(text=f"Error: {data}")
+                    self.live_start_button.config(state="normal")
+                    self.live_stop_button.config(state="disabled")
+                    if self.live_analyzer and self.live_analyzer.packet_count:
+                        self.live_export_button.config(state="normal")
+                elif kind == "METRICS":
+                    drops = self.live_analyzer.dropped_events if self.live_analyzer else 0
+                    self.live_metrics_label.config(text=(
+                        f"Packets: {data['packets']:,}   Bytes: {data['bytes']:,}   "
+                        f"Active flows: {data['flows']:,}   Alerts: {data['alerts']:,}   "
+                        f"Application queue drops: {drops:,}"
+                    ))
+                elif kind == "ALERT":
+                    self.live_alert_text.config(state="normal")
+                    self.live_alert_text.insert("end", f"[{data.severity}] {data.rule_name}: {data.explanation}\n\n")
+                    self.live_alert_text.see("end")
+                    self.live_alert_text.config(state="disabled")
+        except queue.Empty:
+            pass
+        if self.live_session and self.live_session.state == "Error":
+            detail = self.live_session.error or "Capture backend stopped unexpectedly."
+            self.live_status_label.config(text=f"Error: {detail}")
+            self.live_start_button.config(state="normal")
+            self.live_stop_button.config(state="disabled")
+            if self.live_analyzer and self.live_analyzer.packet_count:
+                self.live_export_button.config(state="normal")
+        self.after(100, self._poll_queue)
+
+    def _on_close(self) -> None:
+        """Stop any live worker before the Tk interpreter is destroyed."""
+        if self.live_session and self.live_session.state in ("Starting", "Capturing"):
+            try:
+                self.live_session.stop()
+            except Exception:
+                pass
+        self.destroy()
 
     def _on_analysis_complete(
         self,
