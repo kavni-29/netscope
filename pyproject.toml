@@ -27,8 +27,12 @@ dev = [
 [project.scripts]
 netscope = "netscope.cli:main"
 
+[tool.setuptools.packages.find]
+include = ["netscope*"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+
