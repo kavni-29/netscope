@@ -11,6 +11,7 @@ import os
 import queue
 import threading
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Dict, List, Optional
@@ -37,7 +38,7 @@ from netscope.visualisation import (
     plot_top_endpoints,
     plot_traffic_over_time,
 )
-from netscope.live import LiveAnalyzer, LiveCaptureSession, discover_interfaces
+from netscope.live import LiveAnalyzer, LiveCaptureSession, capture_backend_status, discover_interfaces
 
 
 class NetScopeGUI(tk.Tk):
@@ -62,9 +63,11 @@ class NetScopeGUI(tk.Tk):
         self.live_analyzer: Optional[LiveAnalyzer] = None
         self.live_event_queue: queue.Queue = queue.Queue(maxsize=200)
         self.live_interface_map: Dict[str, str] = {}
+        self.live_backend_ready = False
 
         self._configure_styles()
         self._build_ui()
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._poll_queue()
 
@@ -465,6 +468,13 @@ class NetScopeGUI(tk.Tk):
         self.live_export_button = ttk.Button(frame, text="Export Session", command=self._export_live_session, state="disabled")
         self.live_export_button.grid(row=3, column=1, sticky="w", padx=(175, 6), pady=8)
         frame.columnconfigure(1, weight=1)
+        backend = ttk.LabelFrame(self.tab_live, text=" Capture Dependency ", padding=8)
+        backend.pack(fill="x", pady=5)
+        self.live_backend_label = ttk.Label(backend, text="Checking capture backend...")
+        self.live_backend_label.pack(side="left", fill="x", expand=True)
+        self.live_download_button = ttk.Button(backend, text="Download Npcap", command=self._open_npcap_download)
+        self.live_download_button.pack(side="right", padx=4)
+        ttk.Button(backend, text="Check Again", command=self._refresh_capture_backend).pack(side="right", padx=4)
         status = ttk.LabelFrame(self.tab_live, text=" Session Status ", padding=12)
         status.pack(fill="x", pady=6)
         self.live_status_label = ttk.Label(status, text="Idle — no live interface is being monitored.")
@@ -474,6 +484,32 @@ class NetScopeGUI(tk.Tk):
         self.live_alert_text = tk.Text(self.tab_live, height=12, wrap="word", state="disabled")
         self.live_alert_text.pack(fill="both", expand=True, pady=6)
         self._refresh_live_interfaces()
+        self._refresh_capture_backend()
+
+    def _on_notebook_tab_changed(self, _event=None) -> None:
+        """Recheck capture readiness whenever the user opens Live Monitoring."""
+        if self.notebook.select() == str(self.tab_live):
+            self._refresh_capture_backend()
+            self._refresh_live_interfaces()
+
+    def _refresh_capture_backend(self) -> None:
+        ready, message = capture_backend_status()
+        self.live_backend_ready = ready
+        self.live_backend_label.config(text=message)
+        is_windows = os.name == "nt"
+        self.live_download_button.config(state="normal" if is_windows and not ready else "disabled")
+        if not ready:
+            self.live_start_button.config(state="disabled")
+        elif not (self.live_session and self.live_session.state in ("Starting", "Capturing", "Stopping")):
+            self.live_start_button.config(state="normal")
+
+    def _open_npcap_download(self) -> None:
+        """Open Npcap's official download page; installation remains user-driven."""
+        try:
+            webbrowser.open("https://npcap.com/", new=2)
+            self.live_status_label.config(text="Npcap download page opened. Run its installer and approve the Windows driver prompt, then restart NetScope.")
+        except Exception as exc:
+            messagebox.showerror("Could Not Open Download Page", f"Open the official Npcap download page manually:\nhttps://npcap.com/\n\n{exc}")
 
     def _refresh_live_interfaces(self) -> None:
         try:
@@ -693,13 +729,13 @@ class NetScopeGUI(tk.Tk):
                 if kind == "STATE":
                     self.live_status_label.config(text=data)
                     if data == "Stopped":
-                        self.live_start_button.config(state="normal")
+                        self.live_start_button.config(state="normal" if self.live_backend_ready else "disabled")
                         self.live_stop_button.config(state="disabled")
                         if self.live_analyzer and self.live_analyzer.packet_count:
                             self.live_export_button.config(state="normal")
                 elif kind == "ERROR":
                     self.live_status_label.config(text=f"Error: {data}")
-                    self.live_start_button.config(state="normal")
+                    self.live_start_button.config(state="normal" if self.live_backend_ready else "disabled")
                     self.live_stop_button.config(state="disabled")
                     if self.live_analyzer and self.live_analyzer.packet_count:
                         self.live_export_button.config(state="normal")
@@ -720,7 +756,7 @@ class NetScopeGUI(tk.Tk):
         if self.live_session and self.live_session.state == "Error":
             detail = self.live_session.error or "Capture backend stopped unexpectedly."
             self.live_status_label.config(text=f"Error: {detail}")
-            self.live_start_button.config(state="normal")
+            self.live_start_button.config(state="normal" if self.live_backend_ready else "disabled")
             self.live_stop_button.config(state="disabled")
             if self.live_analyzer and self.live_analyzer.packet_count:
                 self.live_export_button.config(state="normal")

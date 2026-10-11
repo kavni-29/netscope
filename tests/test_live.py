@@ -3,7 +3,7 @@ from scapy.layers.inet import IP, TCP
 from scapy.layers.l2 import Ether
 import threading
 
-from netscope.live import LiveAnalyzer, LiveCaptureSession
+from netscope.live import LiveAnalyzer, LiveCaptureSession, capture_backend_status
 from netscope.parser import stream_packets
 
 
@@ -90,3 +90,15 @@ def test_flow_aggregator_expires_inactive_flows():
     assert flows.expire_before(10.0) == 0
     assert flows.expire_before(10.1) == 1
     assert flows.flow_count == 0
+
+
+def test_backend_check_reports_missing_npcap(monkeypatch):
+    from scapy.all import conf
+    import netscope.live as live
+
+    monkeypatch.setattr(live.sys, "platform", "win32")
+    monkeypatch.setattr(conf, "use_pcap", False)
+    available, message = capture_backend_status()
+
+    assert not available
+    assert "Npcap" in message

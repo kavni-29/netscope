@@ -131,6 +131,8 @@ flowchart TD
 
 Permissions vary by OS configuration. NetScope reports backend/interface/filter errors and does not choose a replacement interface automatically.
 
+When the Live Monitoring tab opens, NetScope checks whether Scapy can access the capture backend. If Npcap is missing, the tab offers a button to open the official [Npcap download page](https://npcap.com/#download). Install Npcap using its installer and approve Windows' driver-installation prompt. Then restart NetScope so Scapy can load the newly installed driver; the live capture controls will be enabled when the backend is detected. NetScope does not download or install a system driver silently.
+
 ### 2. Clone and Setup Environment
 ```powershell
 # Clone the repository
@@ -209,7 +211,7 @@ python -m netscope.cli --input samples/synthetic_demo.pcap --output reports/demo
 
 ### 4. Live Monitoring
 
-In the desktop app, open **Live Monitoring**, refresh the interface list, select the intended interface, optionally enter a BPF capture filter, and choose whether to record to PCAPNG. The status changes to Capturing only after Scapy starts. Stop ends the capture and closes the recording.
+In the desktop app, open **Live Monitoring**. NetScope checks for the capture backend and presents the official Npcap download link if it is missing. Once available, refresh the interface list, select the intended interface, optionally enter a BPF capture filter, and choose whether to record to PCAPNG. The status changes to Capturing only after Scapy starts. Stop ends the capture and closes the recording.
 
 The CLI can list interfaces, capture until Ctrl+C, or capture for a fixed duration:
 

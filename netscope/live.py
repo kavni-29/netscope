@@ -51,6 +51,21 @@ def discover_interfaces() -> list[tuple[str, str]]:
         raise RuntimeError(f"Could not enumerate capture interfaces: {exc}. Check that Npcap (Windows) or libpcap (Linux/macOS) is installed.") from exc
 
 
+def capture_backend_status() -> tuple[bool, str]:
+    """Check whether Scapy can access a live-capture backend on this machine."""
+    try:
+        from scapy.all import conf
+        if sys.platform.startswith("win") and not conf.use_pcap:
+            return False, "Npcap is not available to Scapy. If you just installed it, restart NetScope; otherwise use the download button."
+        l2_listener = getattr(conf, "L2listen", None)
+        if l2_listener is None or "_NotAvailableSocket" in repr(l2_listener):
+            dependency = "Npcap" if sys.platform.startswith("win") else "a packet-capture backend"
+            return False, f"Scapy cannot find {dependency}. Install the required capture component, then check again."
+        return True, "Capture backend detected. Interface access will be checked when capture starts."
+    except Exception as exc:
+        return False, f"Could not check the capture backend: {exc}"
+
+
 class LiveAnalyzer:
     """Incremental shared-flow processing with bounded packet/alert history."""
 
