@@ -92,3 +92,11 @@ docs/           Design and usage notes
 NetScope analyses packet metadata, not encrypted application contents. Its rules are simple heuristics, so ordinary activity can trigger alerts. Live capture also depends on the computer's driver and permissions. Screenshots aren't included yet.
 
 This project has given me practice with packet parsing, flow aggregation, statistics, Tkinter, and testing a shared analysis pipeline from both saved captures and live input.
+
+## More documentation
+
+- [Architecture](docs/architecture.md)
+- [Data model](docs/data_model.md)
+- [Deployment and setup](docs/deployment.md)
+- [Detection rules](docs/detection_rules.md)
+- [Testing](docs/testing.md)
