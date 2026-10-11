@@ -274,6 +274,7 @@ Detailed technical engineering documents are located in [`docs/`](docs/):
 - [`docs/detection_rules.md`](docs/detection_rules.md) — Mathematical formulas, evidence schema, and false-positive scenarios.
 - [`docs/data_model.md`](docs/data_model.md) — Typed data models, bidirectional flow key ordering, wire-length convention.
 - [`docs/testing.md`](docs/testing.md) — Testing strategy, synthetic fixtures, boundary coverage.
+- [`docs/deployment.md`](docs/deployment.md) — Step-by-step GitHub push, CI/CD, standalone Windows .exe build, and PyPI packaging.
 - [`docs/interview_guide.md`](docs/interview_guide.md) — Comprehensive technical interview preparation guide with 18 in-depth questions and answers.
 
 ---
