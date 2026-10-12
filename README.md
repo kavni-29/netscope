@@ -52,6 +52,8 @@ python -m netscope.cli --input samples/synthetic_demo.pcap --output reports/demo
 
 That command writes CSV, JSON, Markdown, and PDF reports. To export only a PDF, add `--format pdf`. To also save chart images, add `--charts`.
 
+Generated reports are local output and are ignored by Git. The `--output reports/demo` option keeps them together in that folder. Without `--output`, the folder is named after the capture file, such as `reports/synthetic_demo`. Delete the reports folder whenever you no longer need those results; the commands recreate it.
+
 To generate the synthetic capture again:
 
 ```powershell
